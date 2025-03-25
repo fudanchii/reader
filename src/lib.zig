@@ -19,30 +19,40 @@ pub fn ReaderWithDelimiter(option: ReaderOption) type {
         pub const err = error{ EndOfStream, OutOfMemory };
 
         pub fn read(self: *@This(), outbuf: []u8) !usize {
-            var innerbuffer: [self.buffer.len]u8 = [_]u8{0} ** self.buffer.len;
-
             // If we have excess data from previous read
             if (self.cursor > 0) {
-                const linelen = std.mem.indexOf(u8, self.buffer[0..self.cursor], self.delimiter);
-
-                // We have another line at the previous excess read
-                if (linelen != null and linelen.? >= 0) {
-                    @memcpy(outbuf[0..linelen.?], self.buffer[0..linelen.?]);
-
-                    if (linelen.? + self.delimiter.len < self.cursor) {
-                        std.mem.copyForwards(
-                            u8,
-                            self.buffer[0 .. self.cursor - (linelen.? + self.delimiter.len)],
-                            self.buffer[linelen.? + self.delimiter.len .. self.cursor],
-                        );
-                    }
-
-                    @memset(self.buffer[self.cursor - (linelen.? + self.delimiter.len) .. self.buffer.len], 0);
-                    self.cursor -= linelen.? + self.delimiter.len;
-
-                    return linelen.?;
-                }
+                return self.readFromBuffer(outbuf);
             }
+
+            return self.readFromStream(outbuf);
+        }
+
+        inline fn readFromBuffer(self: *@This(), outbuf: []u8) !usize {
+            const linelen = std.mem.indexOf(u8, self.buffer[0..self.cursor], self.delimiter);
+
+            // We have another line at the previous excess read
+            if (linelen != null and linelen.? >= 0) {
+                @memcpy(outbuf[0..linelen.?], self.buffer[0..linelen.?]);
+
+                if (linelen.? + self.delimiter.len < self.cursor) {
+                    std.mem.copyForwards(
+                        u8,
+                        self.buffer[0 .. self.cursor - (linelen.? + self.delimiter.len)],
+                        self.buffer[linelen.? + self.delimiter.len .. self.cursor],
+                    );
+                }
+
+                @memset(self.buffer[self.cursor - (linelen.? + self.delimiter.len) .. self.buffer.len], 0);
+                self.cursor -= linelen.? + self.delimiter.len;
+
+                return linelen.?;
+            }
+
+            return self.readFromStream(outbuf);
+        }
+
+        inline fn readFromStream(self: *@This(), outbuf: []u8) !usize {
+            var innerbuffer: [self.buffer.len]u8 = [_]u8{0} ** self.buffer.len;
 
             const readlen = try self.reader.read(&innerbuffer);
 
