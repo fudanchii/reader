@@ -8,7 +8,7 @@ pub const ReaderOption = struct {
     delimiter: []const u8,
 };
 
-pub fn ReaderWithDelimiter(option: ReaderOption) type {
+pub fn ScannerWithDelimiter(option: ReaderOption) type {
     return struct {
         reader: std.io.AnyReader,
         buffer: [option.bufSize]u8 = [_]u8{0} ** option.bufSize,
@@ -18,16 +18,16 @@ pub fn ReaderWithDelimiter(option: ReaderOption) type {
 
         pub const err = error{ EndOfStream, OutOfMemory };
 
-        pub fn read(self: *@This(), outbuf: []u8) !usize {
+        pub fn scan(self: *@This(), outbuf: []u8) !usize {
             // If we have excess data from previous read
             if (self.cursor > 0) {
-                return self.readFromBuffer(outbuf);
+                return self.scanFromBuffer(outbuf);
             }
 
-            return self.readFromStream(outbuf);
+            return self.scanFromStream(outbuf);
         }
 
-        inline fn readFromBuffer(self: *@This(), outbuf: []u8) !usize {
+        inline fn scanFromBuffer(self: *@This(), outbuf: []u8) !usize {
             const linelen = std.mem.indexOf(u8, self.buffer[0..self.cursor], self.delimiter);
 
             // We have another line at the previous excess read
@@ -48,10 +48,10 @@ pub fn ReaderWithDelimiter(option: ReaderOption) type {
                 return linelen.?;
             }
 
-            return self.readFromStream(outbuf);
+            return self.scanFromStream(outbuf);
         }
 
-        inline fn readFromStream(self: *@This(), outbuf: []u8) !usize {
+        inline fn scanFromStream(self: *@This(), outbuf: []u8) !usize {
             var innerbuffer: [self.buffer.len]u8 = [_]u8{0} ** self.buffer.len;
 
             const readlen = try self.reader.read(&innerbuffer);
@@ -84,7 +84,7 @@ pub fn ReaderWithDelimiter(option: ReaderOption) type {
 
                 self.cursor += readlen;
 
-                return self.read(outbuf);
+                return self.scan(outbuf);
             }
 
             var pos: usize = 0;
@@ -116,7 +116,7 @@ pub fn ReaderWithDelimiter(option: ReaderOption) type {
     };
 }
 
-pub fn readerWithDelimiter(reader: std.io.AnyReader, comptime option: ReaderOption) ReaderWithDelimiter(option) {
+pub fn scannerWithDelimiter(reader: std.io.AnyReader, comptime option: ReaderOption) ScannerWithDelimiter(option) {
     return .{ .reader = reader };
 }
 
@@ -124,7 +124,7 @@ test "ReaderWithDelimiter" {
     const testing = std.testing;
 
     var bufferStream = std.io.fixedBufferStream("1\n22\n333\n4444\n\n1\n333\n22\n");
-    var linereader = readerWithDelimiter(bufferStream.reader().any(), .{
+    var linescanner = scannerWithDelimiter(bufferStream.reader().any(), .{
         .bufSize = 4,
         .delimiter = "\n",
         .includeDelimiter = false,
@@ -148,7 +148,7 @@ test "ReaderWithDelimiter" {
 
     for (testCases) |tc| {
         var testbuffer: [4]u8 = [_]u8{0} ** 4;
-        const result = try linereader.read(&testbuffer);
+        const result = try linescanner.scan(&testbuffer);
 
         try testing.expectEqual(tc.len, result);
         try testing.expectEqualStrings(tc.line, testbuffer[0..result]);
