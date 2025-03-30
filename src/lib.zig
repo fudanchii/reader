@@ -3,6 +3,9 @@ const std = @import("std");
 pub const ScanOption = struct {
     include_delimiter: bool,
     delimiter: []const u8,
+
+    // The size of buffer for each read from the stream source.
+    read_buffer_size: usize = 256,
 };
 
 pub fn ScannerWithDelimiter(option: ScanOption) type {
@@ -12,6 +15,8 @@ pub fn ScannerWithDelimiter(option: ScanOption) type {
         delimiter: []const u8 = option.delimiter,
         cursor: usize = 0,
         include_delimiter: bool = option.include_delimiter,
+
+        comptime read_buffer_size: usize = option.read_buffer_size,
 
         pub const err = error{ EndOfStream, OutOfMemory };
 
@@ -57,9 +62,7 @@ pub fn ScannerWithDelimiter(option: ScanOption) type {
         }
 
         inline fn scanFromStream(self: *@This(), outbuf: []u8) !usize {
-            const innerbuffer_size = 32;
-
-            var innerbuffer: [innerbuffer_size]u8 = [_]u8{0} ** innerbuffer_size;
+            var innerbuffer: [self.read_buffer_size]u8 = [_]u8{0} ** self.read_buffer_size;
 
             const readlen = try self.reader.read(&innerbuffer);
 
