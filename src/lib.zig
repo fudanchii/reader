@@ -59,7 +59,7 @@ pub fn ScannerWithDelimiter(option: ScanOption) type {
         }
 
         inline fn scanFromStream(self: *@This(), outbuf: []u8) !usize {
-            const innerbuffer_size = 256;
+            const innerbuffer_size = 32;
 
             var innerbuffer: [innerbuffer_size]u8 = [_]u8{0} ** innerbuffer_size;
 
@@ -101,22 +101,20 @@ pub fn ScannerWithDelimiter(option: ScanOption) type {
 
                 @memcpy(outbuf[0..outlen], self.buffer.allocatedSlice()[0..outlen]);
 
-                if (linelen.? + self.delimiter.len < readlen) {
-                    const excesspos = linelen.? + self.delimiter.len;
-                    const excesslen = self.cursor - excesspos;
+                const excesspos = linelen.? + self.delimiter.len;
+                const excesslen = self.cursor - excesspos;
 
-                    std.mem.copyForwards(
-                        u8,
-                        self.buffer.allocatedSlice()[0..excesslen],
-                        self.buffer.allocatedSlice()[excesspos .. excesspos + excesslen],
-                    );
+                std.mem.copyForwards(
+                    u8,
+                    self.buffer.allocatedSlice()[0..excesslen],
+                    self.buffer.allocatedSlice()[excesspos .. excesspos + excesslen],
+                );
 
-                    @memset(self.buffer.allocatedSlice()[excesslen..self.cursor], 0);
+                @memset(self.buffer.allocatedSlice()[excesslen..self.cursor], 0);
 
-                    self.cursor = excesslen;
+                self.cursor = excesslen;
 
-                    self.buffer.shrinkAndFree(self.cursor);
-                }
+                self.buffer.shrinkAndFree(self.cursor);
             }
 
             return outlen;
@@ -204,7 +202,7 @@ test "ReaderWithDelimiter scan include delimiter" {
         var testbuffer: [9]u8 = [_]u8{0} ** 9;
         const result = try line_scanner.scan(&testbuffer);
 
-        // try testing.expectEqual(tc.len, result);
+        try testing.expectEqual(tc.len, result);
         try testing.expectEqualStrings(tc.line, testbuffer[0..result]);
     }
 }
