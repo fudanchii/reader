@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const MAX_BUF_SIZE: usize = 100 * 1024 * 1024;
-
 pub const ScanOption = struct {
     include_delimiter: bool,
     delimiter: []const u8,
