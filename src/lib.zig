@@ -1,20 +1,19 @@
 const std = @import("std");
 
-const BUF_SIZE: usize = 1024;
+const MAX_BUF_SIZE: usize = 100 * 1024 * 1024;
 
-pub const ReaderOption = struct {
-    bufSize: usize = BUF_SIZE,
-    includeDelimiter: bool,
+pub const ScanOption = struct {
+    include_delimiter: bool,
     delimiter: []const u8,
 };
 
-pub fn ScannerWithDelimiter(option: ReaderOption) type {
+pub fn ScannerWithDelimiter(option: ScanOption) type {
     return struct {
         reader: std.io.AnyReader,
-        buffer: [option.bufSize]u8 = [_]u8{0} ** option.bufSize,
+        buffer: std.ArrayList(u8),
         delimiter: []const u8 = option.delimiter,
         cursor: usize = 0,
-        includeDelimiter: bool = option.includeDelimiter,
+        include_delimiter: bool = option.include_delimiter,
 
         pub const err = error{ EndOfStream, OutOfMemory };
 
@@ -28,31 +27,41 @@ pub fn ScannerWithDelimiter(option: ReaderOption) type {
         }
 
         inline fn scanFromBuffer(self: *@This(), outbuf: []u8) !usize {
-            const linelen = std.mem.indexOf(u8, self.buffer[0..self.cursor], self.delimiter);
+            const linelen = std.mem.indexOf(u8, self.buffer.allocatedSlice()[0..self.cursor], self.delimiter);
 
             // We have another line at the previous excess read
             if (linelen != null and linelen.? >= 0) {
-                @memcpy(outbuf[0..linelen.?], self.buffer[0..linelen.?]);
+                var outlen = linelen.?;
+
+                if (self.include_delimiter) {
+                    outlen = linelen.? + self.delimiter.len;
+                }
+
+                @memcpy(outbuf[0..outlen], self.buffer.allocatedSlice()[0..outlen]);
 
                 if (linelen.? + self.delimiter.len < self.cursor) {
                     std.mem.copyForwards(
                         u8,
-                        self.buffer[0 .. self.cursor - (linelen.? + self.delimiter.len)],
-                        self.buffer[linelen.? + self.delimiter.len .. self.cursor],
+                        self.buffer.allocatedSlice()[0 .. self.cursor - (linelen.? + self.delimiter.len)],
+                        self.buffer.allocatedSlice()[linelen.? + self.delimiter.len .. self.cursor],
                     );
                 }
 
-                @memset(self.buffer[self.cursor - (linelen.? + self.delimiter.len) .. self.buffer.len], 0);
+                @memset(self.buffer.allocatedSlice()[self.cursor - (linelen.? + self.delimiter.len) .. self.buffer.capacity], 0);
                 self.cursor -= linelen.? + self.delimiter.len;
 
-                return linelen.?;
+                self.buffer.shrinkAndFree(self.cursor);
+
+                return outlen;
             }
 
             return self.scanFromStream(outbuf);
         }
 
         inline fn scanFromStream(self: *@This(), outbuf: []u8) !usize {
-            var innerbuffer: [self.buffer.len]u8 = [_]u8{0} ** self.buffer.len;
+            const innerbuffer_size = 256;
+
+            var innerbuffer: [innerbuffer_size]u8 = [_]u8{0} ** innerbuffer_size;
 
             const readlen = try self.reader.read(&innerbuffer);
 
@@ -60,8 +69,8 @@ pub fn ScannerWithDelimiter(option: ReaderOption) type {
             if (readlen == 0) {
                 // handle excess with no newline
                 if (self.cursor > 0) {
-                    @memcpy(outbuf[0..self.cursor], self.buffer[0..self.cursor]);
-                    @memset(self.buffer[0..self.cursor], 0);
+                    @memcpy(outbuf[0..self.cursor], self.buffer.allocatedSlice()[0..self.cursor]);
+                    @memset(self.buffer.allocatedSlice()[0..self.cursor], 0);
 
                     defer self.cursor = 0;
 
@@ -71,71 +80,78 @@ pub fn ScannerWithDelimiter(option: ReaderOption) type {
                 return err.EndOfStream;
             }
 
-            const linelen = std.mem.indexOf(u8, &innerbuffer, self.delimiter);
+            try self.buffer.appendSlice(innerbuffer[0..readlen]);
+
+            self.cursor += readlen;
+
+            const linelen = std.mem.indexOf(u8, self.buffer.allocatedSlice()[0..self.cursor], self.delimiter);
 
             // No delimiter found
             if (linelen == null) {
-                // If buffer was full with previous excess, return error
-                if (self.cursor == self.buffer.len or self.cursor + readlen > self.buffer.len) {
-                    return err.OutOfMemory;
-                }
-
-                @memcpy(self.buffer[self.cursor .. self.cursor + readlen], innerbuffer[0..readlen]);
-
-                self.cursor += readlen;
-
                 return self.scan(outbuf);
             }
 
-            var pos: usize = 0;
+            var outlen = linelen.?;
 
             // delimiter found
             {
-                // prepend previous excess
-                if (self.cursor > 0) {
-                    @memcpy(outbuf[0..self.cursor], self.buffer[0..self.cursor]);
-                    @memset(self.buffer[0..self.cursor], 0);
-                    pos = self.cursor;
-                    self.cursor = 0;
+                if (self.include_delimiter) {
+                    outlen = linelen.? + self.delimiter.len;
                 }
 
-                const linelenval = linelen.?;
-                @memcpy(outbuf[pos .. pos + linelenval], innerbuffer[0..linelenval]);
+                @memcpy(outbuf[0..outlen], self.buffer.allocatedSlice()[0..outlen]);
 
-                if (linelenval + self.delimiter.len < readlen) {
-                    const excesspos = linelenval + self.delimiter.len;
-                    const excesslen = readlen - excesspos;
+                if (linelen.? + self.delimiter.len < readlen) {
+                    const excesspos = linelen.? + self.delimiter.len;
+                    const excesslen = self.cursor - excesspos;
 
-                    @memcpy(self.buffer[self.cursor .. self.cursor + excesslen], innerbuffer[excesspos..readlen]);
-                    self.cursor += excesslen;
+                    std.mem.copyForwards(
+                        u8,
+                        self.buffer.allocatedSlice()[0..excesslen],
+                        self.buffer.allocatedSlice()[excesspos .. excesspos + excesslen],
+                    );
+
+                    @memset(self.buffer.allocatedSlice()[excesslen..self.cursor], 0);
+
+                    self.cursor = excesslen;
+
+                    self.buffer.shrinkAndFree(self.cursor);
                 }
             }
 
-            return pos + linelen.?;
+            return outlen;
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.buffer.deinit();
         }
     };
 }
 
-pub fn scannerWithDelimiter(reader: std.io.AnyReader, comptime option: ReaderOption) ScannerWithDelimiter(option) {
-    return .{ .reader = reader };
+pub fn scannerWithDelimiter(reader: std.io.AnyReader, allocator: std.mem.Allocator, comptime option: ScanOption) ScannerWithDelimiter(option) {
+    return .{
+        .reader = reader,
+        .buffer = std.ArrayList(u8).init(allocator),
+    };
 }
 
-test "ReaderWithDelimiter" {
+test "ReaderWithDelimiter scan exclude delimiter" {
     const testing = std.testing;
 
-    var bufferStream = std.io.fixedBufferStream("1\n22\n333\n4444\n\n1\n333\n22\n");
-    var linescanner = scannerWithDelimiter(bufferStream.reader().any(), .{
-        .bufSize = 4,
+    var buffer_stream = std.io.fixedBufferStream("1\n22\n333\n4444\n\n1\n333\n22\n.");
+    var line_scanner = scannerWithDelimiter(buffer_stream.reader().any(), std.testing.allocator, .{
         .delimiter = "\n",
-        .includeDelimiter = false,
+        .include_delimiter = false,
     });
+
+    defer line_scanner.deinit();
 
     const TestCaseType = struct {
         line: []const u8,
         len: usize,
     };
 
-    const testCases = [_]TestCaseType{
+    const test_cases = [_]TestCaseType{
         .{ .line = "1", .len = 1 },
         .{ .line = "22", .len = 2 },
         .{ .line = "333", .len = 3 },
@@ -144,13 +160,51 @@ test "ReaderWithDelimiter" {
         .{ .line = "1", .len = 1 },
         .{ .line = "333", .len = 3 },
         .{ .line = "22", .len = 2 },
+        .{ .line = ".", .len = 1 },
     };
 
-    for (testCases) |tc| {
+    for (test_cases) |tc| {
         var testbuffer: [4]u8 = [_]u8{0} ** 4;
-        const result = try linescanner.scan(&testbuffer);
+        const result = try line_scanner.scan(&testbuffer);
 
         try testing.expectEqual(tc.len, result);
+        try testing.expectEqualStrings(tc.line, testbuffer[0..result]);
+    }
+}
+
+test "ReaderWithDelimiter scan include delimiter" {
+    const testing = std.testing;
+
+    var buffer_stream = std.io.fixedBufferStream("1\r\n22\r\n333\r\n4444\r\n\r\n1\r\n333\r\n22\r\n.");
+    var line_scanner = scannerWithDelimiter(buffer_stream.reader().any(), std.testing.allocator, .{
+        .delimiter = "\r\n",
+        .include_delimiter = true,
+    });
+
+    defer line_scanner.deinit();
+
+    const TestCaseType = struct {
+        line: []const u8,
+        len: usize,
+    };
+
+    const test_cases = [_]TestCaseType{
+        .{ .line = "1\r\n", .len = 3 },
+        .{ .line = "22\r\n", .len = 4 },
+        .{ .line = "333\r\n", .len = 5 },
+        .{ .line = "4444\r\n", .len = 6 },
+        .{ .line = "\r\n", .len = 2 },
+        .{ .line = "1\r\n", .len = 3 },
+        .{ .line = "333\r\n", .len = 5 },
+        .{ .line = "22\r\n", .len = 4 },
+        .{ .line = ".", .len = 1 },
+    };
+
+    for (test_cases) |tc| {
+        var testbuffer: [9]u8 = [_]u8{0} ** 9;
+        const result = try line_scanner.scan(&testbuffer);
+
+        // try testing.expectEqual(tc.len, result);
         try testing.expectEqualStrings(tc.line, testbuffer[0..result]);
     }
 }
