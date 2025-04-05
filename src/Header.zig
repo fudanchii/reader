@@ -13,15 +13,9 @@ pub fn put(self: *@This(), key: []const u8, value: []const u8) !void {
     const elt = self.map.get(key);
     var elt_val = if (elt != null) elt.? else std.ArrayList([]const u8).init(self.allocator);
 
-    const record_key = try self.allocator.alloc(u8, key.len);
-    @memcpy(record_key, key);
+    try elt_val.append(value);
 
-    const record_value = try self.allocator.alloc(u8, value.len);
-    @memcpy(record_value, value);
-
-    try elt_val.append(record_value);
-
-    return self.map.put(record_key, elt_val);
+    return self.map.put(key, elt_val);
 }
 
 pub fn deinit(self: *@This()) void {
@@ -29,9 +23,11 @@ pub fn deinit(self: *@This()) void {
 
     while (iter.next()) |entry| {
         self.allocator.free(entry.key_ptr.*);
+
         for (entry.value_ptr.items) |elt| {
             self.allocator.free(elt);
         }
+
         entry.value_ptr.deinit();
     }
 
@@ -115,9 +111,6 @@ pub fn scanAllFromStream(reader: std.io.AnyReader, allocator: std.mem.Allocator)
     while (true) {
         const field = scanner.scanWithAllocator(allocator) catch break;
 
-        defer allocator.free(field[0]);
-        defer allocator.free(field[1]);
-
         header_result.put(field[0], field[1]) catch |err| {
             std.debug.print("put err: {}\n", .{err});
             break;
@@ -159,4 +152,25 @@ test "Header" {
     );
 
     try std.testing.expectEqual(null, header.get("X-Hello"));
+}
+
+test "Header with multiline value" {
+    const gpa = std.testing.allocator;
+
+    const input =
+        \\Content-Type: text/plain; size="1024909";
+        \\ name="wololo.txt"
+    ;
+
+    const actual_input = try std.mem.replaceOwned(u8, gpa, input, "\n", "\r\n");
+
+    defer gpa.free(actual_input);
+
+    var input_buffer = std.io.fixedBufferStream(actual_input);
+
+    var current_header = Header.scanAllFromStream(input_buffer.reader().any(), gpa);
+
+    defer current_header.deinit();
+
+    try std.testing.expectEqualStrings("text/plain; size=\"1024909\"; name=\"wololo.txt\"", current_header.get("Content-Type").?.items[0]);
 }
