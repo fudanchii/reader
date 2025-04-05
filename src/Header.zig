@@ -34,13 +34,13 @@ pub fn deinit(self: *@This()) void {
     return self.map.deinit();
 }
 
-pub const Scanner = struct {
-    pub const scan_option: lib.ScanOption = .{
+pub const HeaderScanner = struct {
+    pub const scan_option: Scanner.ScanOption = .{
         .include_delimiter = false,
         .delimiter = "\r\n",
     };
 
-    inner_scanner: ScannerWithDelimiter(scan_option),
+    inner_scanner: Scanner.WithDelimiter(scan_option),
 
     pub const Field = struct { []const u8, []const u8 };
 
@@ -100,8 +100,8 @@ pub fn isASCIIWhiteSpace(char: u8) bool {
 
 pub fn scanAllFromStream(reader: std.io.AnyReader, allocator: std.mem.Allocator) Header {
     const header_map = std.StringHashMap(std.ArrayList([]const u8)).init(allocator);
-    var scanner: Scanner = .{
-        .inner_scanner = lib.scannerWithDelimiter(reader, allocator, Scanner.scan_option),
+    var scanner: HeaderScanner = .{
+        .inner_scanner = Scanner.withDelimiter(reader, allocator, HeaderScanner.scan_option),
     };
 
     defer scanner.inner_scanner.deinit();
@@ -121,8 +121,7 @@ pub fn scanAllFromStream(reader: std.io.AnyReader, allocator: std.mem.Allocator)
 }
 
 const std = @import("std");
-const lib = @import("./lib.zig");
-const ScannerWithDelimiter = lib.ScannerWithDelimiter;
+const Scanner = @import("./Scanner.zig");
 const Header = @This();
 
 test "Header" {
@@ -172,5 +171,8 @@ test "Header with multiline value" {
 
     defer current_header.deinit();
 
-    try std.testing.expectEqualStrings("text/plain; size=\"1024909\"; name=\"wololo.txt\"", current_header.get("Content-Type").?.items[0]);
+    try std.testing.expectEqualStrings(
+        "text/plain; size=\"1024909\"; name=\"wololo.txt\"",
+        current_header.get("Content-Type").?.items[0],
+    );
 }
