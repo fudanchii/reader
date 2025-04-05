@@ -22,6 +22,25 @@ pub fn ScannerWithDelimiter(option: ScanOption) type {
         pub const err = error{EndOfStream};
         pub const ScannedString = struct { std.ArrayList(u8), usize };
 
+        pub fn peek(self: *@This(), len: usize) ![]const u8 {
+            var selected_len = len;
+
+            if (self.cursor == 0) {
+                var innerbuffer: [self.read_buffer_size]u8 = [_]u8{0} ** self.read_buffer_size;
+
+                const readlen = try self.reader.read(&innerbuffer);
+
+                if (readlen == 0) return err.EndOfStream;
+
+                selected_len = @min(len, readlen);
+
+                try self.buffer.appendSlice(innerbuffer[0..readlen]);
+                self.cursor += readlen;
+            }
+
+            return self.buffer.allocatedSlice()[0..selected_len];
+        }
+
         pub fn scan(self: *@This()) !ScannedString {
             // If we have excess data from previous read
             if (self.cursor > 0) {
