@@ -1,17 +1,79 @@
-map: std.StringHashMap(std.ArrayList([]const u8)),
+map: std.StringHashMap(std.ArrayList(HeaderFieldValue)),
 allocator: std.mem.Allocator,
 
-pub fn get(self: @This(), key: []const u8) ?std.ArrayList([]const u8) {
+pub const HeaderFieldValue = struct {
+    unstructured: []const u8,
+    structured: ?std.StringHashMap([]const u8) = null,
+
+    const structure_fields_separator = ";";
+    const structure_keyval_separator = "=";
+
+    pub fn asStructured(self: *@This(), allocator: std.mem.Allocator) ?std.StringHashMap([]const u8) {
+        if (self.structured != null) return self.structured;
+
+        if (std.mem.indexOf(u8, self.unstructured, structure_keyval_separator) == null) {
+            return null;
+        }
+
+        var structured_map = std.StringHashMap([]const u8).init(allocator);
+
+        var start_field = 0;
+        while (std.mem.indexOf(u8, self.unstructured[start_field..self.unstructured.len], structure_fields_separator)) |end_field| {
+            var skip_count = 1;
+
+            const key_len = std.mem.indexOf(u8, self.unstructured[start_field..end_field], structure_keyval_separator);
+            if (key_len == null) {
+                structured_map.deinit();
+
+                return null;
+            }
+
+            const key = self.unstructured[start_field..key_len.?];
+            const val = self.unstructured[key_len.? + 1 .. end_field];
+
+            try structured_map.put(key, val);
+
+            while (true) {
+                if (isASCIIWhiteSpace(self.unstructured[end_field + skip_count])) skip_count += 1 else break;
+            }
+
+            start_field = end_field + skip_count;
+        }
+
+        self.structured = structured_map;
+
+        return structured_map;
+    }
+
+    pub fn deinit(self: *@This()) void {
+        if (self.structured != null) {
+            var iter = self.structured.?.iterator();
+
+            // we're not freeing the key value here since it's just a slice over
+            // unstructured data.
+            while (iter.next()) |entry| {
+                entry.key_ptr.* = undefined;
+                entry.value_ptr.* = undefined;
+            }
+
+            self.structured.?.deinit();
+
+            self.structured = null;
+        }
+    }
+};
+
+pub fn get(self: @This(), key: []const u8) ?std.ArrayList(HeaderFieldValue) {
     return self.map.get(key);
 }
 
-pub fn set(self: *@This(), key: []const u8, value: []const u8) !void {
+pub fn set(self: *@This(), key: []const u8, value: HeaderFieldValue) !void {
     return self.put(key, value);
 }
 
-pub fn put(self: *@This(), key: []const u8, value: []const u8) !void {
+pub fn put(self: *@This(), key: []const u8, value: HeaderFieldValue) !void {
     const elt = self.map.get(key);
-    var elt_val = if (elt != null) elt.? else std.ArrayList([]const u8).init(self.allocator);
+    var elt_val = if (elt != null) elt.? else std.ArrayList(HeaderFieldValue).init(self.allocator);
 
     try elt_val.append(value);
 
@@ -24,14 +86,15 @@ pub fn deinit(self: *@This()) void {
     while (iter.next()) |entry| {
         self.allocator.free(entry.key_ptr.*);
 
-        for (entry.value_ptr.items) |elt| {
-            self.allocator.free(elt);
+        for (entry.value_ptr.items) |*elt| {
+            elt.deinit();
+            self.allocator.free(elt.unstructured);
         }
 
         entry.value_ptr.deinit();
     }
 
-    return self.map.deinit();
+    self.map.deinit();
 }
 
 pub const HeaderScanner = struct {
@@ -99,7 +162,7 @@ pub fn isASCIIWhiteSpace(char: u8) bool {
 }
 
 pub fn scanAllFromStream(reader: std.io.AnyReader, allocator: std.mem.Allocator) Header {
-    const header_map = std.StringHashMap(std.ArrayList([]const u8)).init(allocator);
+    const header_map = std.StringHashMap(std.ArrayList(HeaderFieldValue)).init(allocator);
     var scanner: HeaderScanner = .{
         .inner_scanner = Scanner.withDelimiter(reader, allocator, HeaderScanner.scan_option),
     };
@@ -111,7 +174,7 @@ pub fn scanAllFromStream(reader: std.io.AnyReader, allocator: std.mem.Allocator)
     while (true) {
         const field = scanner.scanWithAllocator(allocator) catch break;
 
-        header_result.put(field[0], field[1]) catch |err| {
+        header_result.put(field[0], .{ .unstructured = field[1] }) catch |err| {
             std.debug.print("put err: {}\n", .{err});
             break;
         };
@@ -143,11 +206,11 @@ test "Header" {
 
     defer header.deinit();
 
-    try std.testing.expectEqualStrings("1.0", header.get("MIME-Version").?.items[0]);
-    try std.testing.expectEqualStrings("Wed, 2 Apr 2025 14:15:19 +0900", header.get("Date").?.items[0]);
+    try std.testing.expectEqualStrings("1.0", header.get("MIME-Version").?.items[0].unstructured);
+    try std.testing.expectEqualStrings("Wed, 2 Apr 2025 14:15:19 +0900", header.get("Date").?.items[0].unstructured);
     try std.testing.expectEqualStrings(
         "multipart/alternative; boundary=\"00000000000062617a0631c4bd41\"",
-        header.get("Content-Type").?.items[0],
+        header.get("Content-Type").?.items[0].unstructured,
     );
 
     try std.testing.expectEqual(null, header.get("X-Hello"));
@@ -173,6 +236,6 @@ test "Header with multiline value" {
 
     try std.testing.expectEqualStrings(
         "text/plain; size=\"1024909\"; name=\"wololo.txt\"",
-        current_header.get("Content-Type").?.items[0],
+        current_header.get("Content-Type").?.items[0].unstructured,
     );
 }
