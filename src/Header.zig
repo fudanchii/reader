@@ -7,42 +7,53 @@ pub const HeaderFieldValue = struct {
 
     const structure_fields_separator = ";";
     const structure_keyval_separator = "=";
+    const err = error{NotAStructuredField};
 
-    pub fn asStructured(self: *@This(), allocator: std.mem.Allocator) ?std.StringHashMap([]const u8) {
-        if (self.structured != null) return self.structured;
+    fn captureKeyValue(self: *@This(), idx: u8, start_field: usize, end_field: usize) !void {
+        const key_len = std.mem.indexOf(u8, self.unstructured[start_field..end_field], structure_keyval_separator);
 
-        if (std.mem.indexOf(u8, self.unstructured, structure_keyval_separator) == null) {
-            return null;
+        var key: []const u8 = &[_]u8{idx};
+        var start_val: usize = undefined;
+
+        if (key_len == null) {
+            start_val = start_field;
+        } else {
+            key = self.unstructured[start_field .. start_field + key_len.?];
+            start_val = start_field + key_len.? + 1;
         }
 
-        var structured_map = std.StringHashMap([]const u8).init(allocator);
+        try self.structured.?.put(key, self.unstructured[start_val..end_field]);
+    }
 
-        var start_field = 0;
-        while (std.mem.indexOf(u8, self.unstructured[start_field..self.unstructured.len], structure_fields_separator)) |end_field| {
-            var skip_count = 1;
+    pub fn asStructured(self: *@This(), allocator: std.mem.Allocator) !std.StringHashMap([]const u8) {
+        if (self.structured != null) return self.structured.?;
 
-            const key_len = std.mem.indexOf(u8, self.unstructured[start_field..end_field], structure_keyval_separator);
-            if (key_len == null) {
-                structured_map.deinit();
+        if (std.mem.indexOf(u8, self.unstructured, structure_keyval_separator) == null) {
+            return err.NotAStructuredField;
+        }
 
-                return null;
-            }
+        self.structured = std.StringHashMap([]const u8).init(allocator);
 
-            const key = self.unstructured[start_field..key_len.?];
-            const val = self.unstructured[key_len.? + 1 .. end_field];
+        var start_field: usize = 0;
+        var idx: u8 = 0;
+        while (std.mem.indexOf(u8, self.unstructured[start_field..self.unstructured.len], structure_fields_separator)) |cursor| {
+            const end_field = start_field + cursor;
 
-            try structured_map.put(key, val);
+            try self.captureKeyValue(idx, start_field, end_field);
 
-            while (true) {
+            idx += 1;
+
+            var skip_count: usize = 1;
+            while (end_field + skip_count < self.unstructured.len) {
                 if (isASCIIWhiteSpace(self.unstructured[end_field + skip_count])) skip_count += 1 else break;
             }
 
             start_field = end_field + skip_count;
+        } else if (start_field < self.unstructured.len) {
+            try self.captureKeyValue(idx, start_field, self.unstructured.len);
         }
 
-        self.structured = structured_map;
-
-        return structured_map;
+        return self.structured.?;
     }
 
     pub fn deinit(self: *@This()) void {
@@ -238,4 +249,10 @@ test "Header with multiline value" {
         "text/plain; size=\"1024909\"; name=\"wololo.txt\"",
         current_header.get("Content-Type").?.items[0].unstructured,
     );
+
+    const content_type = try current_header.get("Content-Type").?.items[0].asStructured(gpa);
+
+    try std.testing.expectEqualStrings("text/plain", content_type.get(&[_]u8{0}).?);
+    try std.testing.expectEqualStrings("\"1024909\"", content_type.get("size").?);
+    try std.testing.expectEqualStrings("\"wololo.txt\"", content_type.get("name").?);
 }
