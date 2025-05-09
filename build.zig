@@ -11,21 +11,20 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
 
-    const unit_tests: []const LibraryModule = &[_]LibraryModule{
-        .{ .name = "header", .root_source_file = b.path("src/Header.zig") },
-        .{ .name = "scanner", .root_source_file = b.path("src/Scanner.zig") },
+    const lib_mods: []const LibraryModule = &[_]LibraryModule{
+        .{ .name = "scanner", .root_source_file = b.path("src/lib.zig") },
     };
 
-    for (unit_tests) |unit_test| {
+    for (lib_mods) |mod_def| {
         const mod = b.createModule(.{
-            .root_source_file = unit_test.root_source_file,
+            .root_source_file = mod_def.root_source_file,
             .target = target,
             .optimize = optimize,
         });
 
         const lib = b.addLibrary(.{
             .linkage = .static,
-            .name = unit_test.name,
+            .name = mod_def.name,
             .root_module = mod,
         });
 
