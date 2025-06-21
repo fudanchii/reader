@@ -8,6 +8,8 @@ pub const ScanOption = struct {
     read_buffer_size: usize = 256,
 };
 
+pub const ScannedString = struct { std.ArrayList(u8), usize };
+
 pub fn WithDelimiter(option: ScanOption) type {
     return struct {
         reader: std.io.AnyReader,
@@ -20,7 +22,6 @@ pub fn WithDelimiter(option: ScanOption) type {
         comptime read_buffer_size: usize = option.read_buffer_size,
 
         pub const err = error{EndOfStream};
-        pub const ScannedString = struct { std.ArrayList(u8), usize };
 
         pub fn peek(self: *@This(), len: usize) ![]const u8 {
             var selected_len = len;
